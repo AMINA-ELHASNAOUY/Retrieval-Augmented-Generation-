@@ -1,1 +1,21 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
 
+# Env
+.env
+
+# Data / vector store
+data/
+*.pdf
+chroma_db/
+
+# OS
+.DS_Store
+
+# Editors
+.vscode/
+.idea/
