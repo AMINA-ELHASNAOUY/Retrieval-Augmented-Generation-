@@ -1,4 +1,4 @@
-# Retrieval-Augmented-Generation-
+# Retrieval-Augmented-Generation
 # 🔍 PaperMind — RAG Agent for LLM Reasoning & Agent Research
 
 [![Status](https://img.shields.io/badge/status-in%20development-yellow)]()
