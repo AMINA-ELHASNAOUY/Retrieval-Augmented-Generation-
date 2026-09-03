@@ -1,67 +1,154 @@
 """
-ingest.py — Milestone 1: arXiv ingestion pipeline.
+ingest.py — Milestone 1: arXiv ingestion + PDF parsing.
 
-Searches arXiv for papers matching a query/category, downloads the PDFs,
-and stores lightweight metadata (title, authors, abstract, arxiv_id, pdf_path)
-so later stages (chunking, embedding) know what they're working with.
+Pipeline:
+    1. Query the arXiv API for recent papers matching our topic query.
+    2. Download each paper's PDF (skip ones we already have).
+    3. Parse each PDF into raw text with PyMuPDF, keeping per-page text
+       so downstream chunking can preserve rough page context.
+
+Run directly to ingest a fresh batch:
+    python ingest.py
 """
 
-import json
-import arxiv
+from __future__ import annotations
 
-from config import ARXIV_MAX_RESULTS, ARXIV_CATEGORY, PDF_DIR, METADATA_PATH
+import time
+import urllib.request
+import xml.etree.ElementTree as ET
+from dataclasses import dataclass, field
+from pathlib import Path
+
+import pymupdf as fitz  # PyMuPDF (import name is legacy but this avoids the deprecation warning)
+
+import config
+
+ARXIV_API_URL = "http://export.arxiv.org/api/query"
+ATOM_NS = {"atom": "http://www.w3.org/2005/Atom"}
 
 
-def search_papers(query: str, max_results: int = ARXIV_MAX_RESULTS):
-    """Search arXiv and return a list of arxiv.Result objects."""
-    search = arxiv.Search(
-        query=query,
-        max_results=max_results,
-        sort_by=arxiv.SortCriterion.SubmittedDate,
+@dataclass
+class Paper:
+    arxiv_id: str
+    title: str
+    authors: list[str]
+    abstract: str
+    pdf_url: str
+    published: str
+    pdf_path: Path | None = None
+    pages: list[str] = field(default_factory=list)  # raw text per page
+
+
+def _build_query_url(query: str, max_results: int) -> str:
+    params = (
+        f"search_query=all:{urllib.parse.quote(query)}"
+        f"&start=0&max_results={max_results}"
+        f"&sortBy=submittedDate&sortOrder=descending"
     )
-    return list(search.results())
+    return f"{ARXIV_API_URL}?{params}"
 
 
-def download_paper(result: arxiv.Result) -> str:
-    """Download a single paper's PDF into PDF_DIR. Returns the local file path."""
-    safe_id = result.get_short_id().replace("/", "_")
-    filename = f"{safe_id}.pdf"
-    filepath = PDF_DIR / filename
-
-    if not filepath.exists():
-        result.download_pdf(dirpath=str(PDF_DIR), filename=filename)
-
-    return str(filepath)
+import urllib.parse  # noqa: E402  (kept near usage for clarity)
 
 
-def build_metadata(result: arxiv.Result, pdf_path: str) -> dict:
-    return {
-        "arxiv_id": result.get_short_id(),
-        "title": result.title.strip(),
-        "authors": [a.name for a in result.authors],
-        "abstract": result.summary.strip(),
-        "published": result.published.isoformat(),
-        "pdf_path": pdf_path,
-        "url": result.entry_id,
-    }
+def fetch_arxiv_metadata(
+    query: str = config.ARXIV_SEARCH_QUERY,
+    max_results: int = config.ARXIV_MAX_RESULTS,
+) -> list[Paper]:
+    """Query the arXiv API and return paper metadata (no PDFs yet)."""
+    url = _build_query_url(query, max_results)
+    with urllib.request.urlopen(url, timeout=30) as resp:
+        raw = resp.read()
+
+    root = ET.fromstring(raw)
+    papers: list[Paper] = []
+
+    for entry in root.findall("atom:entry", ATOM_NS):
+        arxiv_id = entry.find("atom:id", ATOM_NS).text.strip().split("/")[-1]
+        title = entry.find("atom:title", ATOM_NS).text.strip().replace("\n", " ")
+        abstract = entry.find("atom:summary", ATOM_NS).text.strip()
+        published = entry.find("atom:published", ATOM_NS).text.strip()
+        authors = [
+            a.find("atom:name", ATOM_NS).text
+            for a in entry.findall("atom:author", ATOM_NS)
+        ]
+
+        pdf_url = None
+        for link in entry.findall("atom:link", ATOM_NS):
+            if link.get("title") == "pdf":
+                pdf_url = link.get("href")
+                break
+        if pdf_url is None:
+            # fall back to the abs page -> pdf convention
+            pdf_url = f"https://arxiv.org/pdf/{arxiv_id}.pdf"
+
+        papers.append(
+            Paper(
+                arxiv_id=arxiv_id,
+                title=title,
+                authors=authors,
+                abstract=abstract,
+                pdf_url=pdf_url,
+                published=published,
+            )
+        )
+
+    return papers
 
 
-def ingest(query: str = "LLM reasoning agentic systems", max_results: int = ARXIV_MAX_RESULTS):
-    """Full ingestion run: search -> download -> save metadata.json"""
-    print(f"Searching arXiv for: '{query}' (category filter: {ARXIV_CATEGORY})")
-    results = search_papers(query, max_results)
-    print(f"Found {len(results)} papers.")
+def download_pdf(paper: Paper, dest_dir: Path = config.RAW_PDF_DIR) -> Path:
+    """Download a paper's PDF if we don't already have it."""
+    safe_id = paper.arxiv_id.replace("/", "_")
+    dest_path = dest_dir / f"{safe_id}.pdf"
 
-    all_metadata = []
-    for i, result in enumerate(results, 1):
-        print(f"[{i}/{len(results)}] Downloading: {result.title[:60]}...")
-        pdf_path = download_paper(result)
-        all_metadata.append(build_metadata(result, pdf_path))
+    if dest_path.exists():
+        paper.pdf_path = dest_path
+        return dest_path
 
-    METADATA_PATH.write_text(json.dumps(all_metadata, indent=2))
-    print(f"\nDone. Saved metadata for {len(all_metadata)} papers to {METADATA_PATH}")
-    return all_metadata
+    req = urllib.request.Request(
+        paper.pdf_url, headers={"User-Agent": "PaperMind/0.1 (research assistant)"}
+    )
+    with urllib.request.urlopen(req, timeout=60) as resp:
+        dest_path.write_bytes(resp.read())
+
+    paper.pdf_path = dest_path
+    return dest_path
+
+
+def parse_pdf(pdf_path: Path) -> list[str]:
+    """Extract raw text per page from a PDF using PyMuPDF."""
+    pages: list[str] = []
+    with fitz.open(pdf_path) as doc:
+        for page in doc:
+            pages.append(page.get_text("text"))
+    return pages
+
+
+def ingest_batch(
+    query: str = config.ARXIV_SEARCH_QUERY,
+    max_results: int = config.ARXIV_MAX_RESULTS,
+    delay_seconds: float = 3.0,
+) -> list[Paper]:
+    """Full Milestone 1 pipeline: fetch metadata, download, parse."""
+    print(f"Querying arXiv for: {query!r} (max {max_results})")
+    papers = fetch_arxiv_metadata(query, max_results)
+    print(f"Found {len(papers)} papers.")
+
+    for i, paper in enumerate(papers, 1):
+        print(f"[{i}/{len(papers)}] {paper.arxiv_id} — {paper.title[:70]}")
+        try:
+            pdf_path = download_pdf(paper)
+            paper.pages = parse_pdf(pdf_path)
+            print(f"    parsed {len(paper.pages)} pages")
+        except Exception as e:
+            print(f"    FAILED: {e}")
+        # arXiv asks for a few seconds between requests to be polite
+        time.sleep(delay_seconds)
+
+    return papers
 
 
 if __name__ == "__main__":
-    ingest()
+    result = ingest_batch()
+    ok = sum(1 for p in result if p.pages)
+    print(f"\nDone. {ok}/{len(result)} papers ingested successfully.")
