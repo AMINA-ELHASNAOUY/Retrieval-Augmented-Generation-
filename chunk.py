@@ -1,62 +1,58 @@
 """
-chunk.py — Milestone 2: PDF parsing + chunking.
-
-Extracts raw text from downloaded PDFs (PyMuPDF) and splits it into
-overlapping chunks sized for embedding. Overlap keeps context from being
-severed at chunk boundaries.
+chunk.py — extract text from PDFs and split into overlapping word chunks.
+Writes data/chunks.json (metadata.json is left untouched).
 """
 
 import json
-import fitz  # PyMuPDF
+import re
 
-from config import METADATA_PATH, CHUNK_SIZE, CHUNK_OVERLAP
+import pymupdf
+
+import config
 
 
 def extract_text(pdf_path: str) -> str:
-    """Pull all text out of a PDF, page by page."""
-    doc = fitz.open(pdf_path)
-    text = "\n".join(page.get_text() for page in doc)
-    doc.close()
+    with pymupdf.open(pdf_path) as doc:
+        text = "\n".join(page.get_text() for page in doc)
+    # Drop the bibliography: cut at the last "References" heading
+    matches = list(re.finditer(r"\n\s*(references|bibliography)\s*\n", text, re.I))
+    if matches and matches[-1].start() > len(text) * 0.5:
+        text = text[: matches[-1].start()]
+    text = re.sub(r"-\n(\w)", r"\1", text)  # fix hyphenated line breaks
     return text
 
 
-def split_into_chunks(text: str, chunk_size: int = CHUNK_SIZE, overlap: int = CHUNK_OVERLAP):
-    """
-    Word-based sliding window chunking.
-    chunk_size and overlap are measured in words, not characters —
-    simpler to reason about and good enough for MiniLM's token limits.
-    """
+def split_into_chunks(text: str, size: int = config.CHUNK_SIZE, overlap: int = config.CHUNK_OVERLAP):
     words = text.split()
-    if not words:
-        return []
-
-    chunks = []
-    start = 0
+    chunks, start = [], 0
     while start < len(words):
-        end = start + chunk_size
-        chunk_words = words[start:end]
-        chunks.append(" ".join(chunk_words))
+        end = start + size
+        chunk = " ".join(words[start:end])
+        if len(chunk.split()) >= 30:  # skip tiny tail fragments
+            chunks.append(chunk)
         if end >= len(words):
             break
-        start = end - overlap  # step forward, but re-include the overlap window
-
+        start = end - overlap
     return chunks
 
 
 def chunk_all_papers():
-    """Read metadata.json, chunk every paper's PDF, attach chunks to each record."""
-    metadata = json.loads(METADATA_PATH.read_text())
-
-    for paper in metadata:
-        print(f"Chunking: {paper['title'][:60]}...")
-        text = extract_text(paper["pdf_path"])
-        chunks = split_into_chunks(text)
-        paper["chunks"] = chunks
-        print(f"  -> {len(chunks)} chunks")
-
-    METADATA_PATH.write_text(json.dumps(metadata, indent=2))
-    print(f"\nDone. Chunks written back into {METADATA_PATH}")
-    return metadata
+    papers = json.loads(config.METADATA_PATH.read_text())
+    out = []
+    for p in papers:
+        chunks = split_into_chunks(extract_text(p["pdf_path"]))
+        print(f"{p['arxiv_id']}: {len(chunks)} chunks - {p['title'][:55]}")
+        for i, c in enumerate(chunks):
+            out.append({
+                "id": f"{p['arxiv_id']}_{i}",
+                "arxiv_id": p["arxiv_id"],
+                "title": p["title"],
+                "url": p["pdf_url"],
+                "chunk_index": i,
+                "text": c,
+            })
+    (config.DATA_DIR / "chunks.json").write_text(json.dumps(out))
+    print(f"\nDone. {len(out)} chunks -> data/chunks.json")
 
 
 if __name__ == "__main__":
