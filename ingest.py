@@ -16,6 +16,7 @@ import argparse
 import json
 import re
 import time
+import urllib.error
 import urllib.request
 from dataclasses import dataclass, asdict
 from pathlib import Path
@@ -75,17 +76,33 @@ def fetch_arxiv_metadata(query: str, max_results: int) -> list[Paper]:
     return papers
 
 
-def download_pdf(paper: Paper) -> Path:
+def download_pdf(paper: Paper, retries: int = 4) -> Path:
     dest = config.RAW_PDF_DIR / f"{paper.arxiv_id.replace('/', '_')}.pdf"
-    if not dest.exists():
-        req = urllib.request.Request(
-            paper.pdf_url, headers={"User-Agent": "PaperMind/0.1 (research assistant)"}
-        )
-        with urllib.request.urlopen(req, timeout=60) as resp:
-            dest.write_bytes(resp.read())
-        time.sleep(3)  # be polite to arXiv
-    paper.pdf_path = str(dest)
-    return dest
+    if dest.exists():
+        paper.pdf_path = str(dest)
+        return dest
+
+    last_err = None
+    for attempt in range(1, retries + 1):
+        try:
+            req = urllib.request.Request(
+                paper.pdf_url,
+                headers={"User-Agent": "PaperMind/0.1 (research assistant)"},
+            )
+            with urllib.request.urlopen(req, timeout=60) as resp:
+                data = resp.read()
+            dest.write_bytes(data)
+            time.sleep(3)  # be polite to arXiv
+            paper.pdf_path = str(dest)
+            return dest
+        except urllib.error.HTTPError as e:
+            if e.code in (404, 406):
+                raise  # permanent, retrying won't help
+            last_err = e
+        except Exception as e:  # IncompleteRead, timeouts, resets
+            last_err = e
+        time.sleep(2 * attempt)  # backoff: 2s, 4s, 6s
+    raise last_err
 
 
 def ingest_batch(query: str, max_results: int) -> None:
