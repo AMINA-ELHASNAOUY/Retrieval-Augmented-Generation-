@@ -33,6 +33,7 @@ flowchart LR
 ```
 
 **Indexing (offline):** `ingest.py` → `chunk.py` → `embed.py`
+
 **Querying (online):** `main.py` / `retrieve.py` embed the question, pull the most similar chunks from ChromaDB, and ask the LLM to answer only from that context.
 
 ## 🚀 Features
@@ -47,7 +48,7 @@ flowchart LR
 | Chat UI (Streamlit) | ✅ Done |
 | Expandable corpus (custom arXiv queries, `add_pdf.py` for local PDFs) | ✅ Done |
 | Configurable via `.env` | ✅ Done |
-| Demo GIF / screenshots | 🔲 Planned |
+| Demo screenshot | ✅ Done |
 | Retrieval quality evaluation | 🔲 Planned |
 
 ## 🛠️ Tech Stack
@@ -128,6 +129,49 @@ ollama pull qwen2.5:7b
 OLLAMA_MODEL=qwen2.5:7b streamlit run main.py
 ```
 
+## 🔧 Configuration
+
+All settings live in `config.py` and can be overridden in a `.env` file (`cp .env.example .env`).
+
+| Variable | Default | What it does |
+|---|---|---|
+| `OLLAMA_MODEL` | `qwen2.5:1.5b` | Local LLM used for answers (`qwen2.5:7b` is better but slower) |
+| `OLLAMA_HOST` | `http://localhost:11434` | Where Ollama is running |
+| `OLLAMA_NUM_CTX` | `4096` | Context window passed to the model |
+| `EMBEDDING_MODEL` | `all-MiniLM-L6-v2` | Sentence-transformers model for chunks and queries |
+| `CHROMA_DB_PATH` | `./data/chroma_db` | Where the vector store is persisted |
+| `ARXIV_MAX_RESULTS` | `10` | Papers fetched per `ingest.py` run |
+| `CHUNK_SIZE` | `200` | Words per chunk |
+| `CHUNK_OVERLAP` | `40` | Words shared between neighbouring chunks |
+
+Retrieval returns the top 5 chunks per question (`TOP_K_RESULTS` in `config.py`).
+
+## 🧠 Design Decisions
+
+- **200-word chunks.** all-MiniLM-L6-v2 only reads about 256 tokens, so longer chunks would be silently truncated before embedding.
+- **40-word overlap.** Keeps sentences that fall on a chunk boundary retrievable from either side.
+- **Word-based splitting.** Simple to reason about and good enough for this embedding model; no tokenizer dependency.
+- **Local models only.** Embeddings (sentence-transformers) and generation (Ollama) both run on the laptop: no API keys, no usage costs, papers never leave the machine.
+- **Small default LLM.** `qwen2.5:1.5b` keeps answers fast on a MacBook Air; the model is one environment variable away from a larger one.
+- **Grounded prompt, low temperature.** The system prompt tells the model to answer only from the retrieved passages, and generation runs at temperature 0.2 to keep it close to the source text.
+
+## 💬 Example Output
+
+```text
+$ python retrieve.py "What is chain-of-thought prompting and why does it help?"
+
+Chain-of-thought prompting involves providing a series of intermediate reasoning
+steps as a chain of thought, which helps in improving the ability of large language
+models to perform complex reasoning. It allows models to decompose multi-step
+problems into intermediate steps, enabling additional computation allocation for
+more reasoning steps. The chain of thought provides an interpretable window into
+the model's reasoning process, facilitating debugging and understanding of the
+reasoning path. [...]
+
+Sources:
+[1] Chain-of-Thought Prompting Elicits Reasoning in Large Language Models - https://arxiv.org/pdf/2201.11903v6
+```
+
 ## 📚 Current Corpus
 
 The working corpus has 8 papers on chain-of-thought, tool use, and LLM agents (483 chunks), including *Chain-of-Thought Prompting Elicits Reasoning in Large Language Models* (2201.11903) and *Efficient Tool Use with Chain-of-Abstraction Reasoning* (2401.17464). PDFs and the vector store are not committed; rebuild them with the commands above.
@@ -145,7 +189,8 @@ The working corpus has 8 papers on chain-of-thought, tool use, and LLM agents (4
 - [x] Milestone 2: Chunking + local embedding + ChromaDB storage
 - [x] Milestone 3: Retrieval + LLM generation with source citations
 - [x] Milestone 4: Streamlit chat interface
-- [ ] Milestone 5: Polish (demo GIF, retrieval evaluation, larger corpus)
+- [x] Milestone 5: Polish (demo screenshot, pinned dependencies, download retry)
+- [ ] Milestone 6: Retrieval quality evaluation + larger corpus
 
 ## 📄 License
 
