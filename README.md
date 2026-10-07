@@ -3,9 +3,9 @@
 ![Status](https://img.shields.io/badge/status-working%20prototype-blue)
 ![Python](https://img.shields.io/badge/python-3.12-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
+![Runs locally](https://img.shields.io/badge/runs-100%25%20locally-orange)
 
 ![PaperMind demo](assets/demo.png)
-![Runs locally](https://img.shields.io/badge/runs-100%25%20locally-orange)
 
 An AI research assistant that reads arXiv papers on LLM reasoning and agentic systems, and answers questions with cited sources. Built from scratch to understand how retrieval-augmented generation works under the hood. It runs fully locally: no API keys, no cloud costs.
 
