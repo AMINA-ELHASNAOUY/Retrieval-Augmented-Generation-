@@ -49,7 +49,6 @@ flowchart LR
 | Expandable corpus (custom arXiv queries, `add_pdf.py` for local PDFs) | ✅ Done |
 | Configurable via `.env` | ✅ Done |
 | Demo screenshot | ✅ Done |
-| Retrieval quality evaluation | 🔲 Planned |
 
 ## 🛠️ Tech Stack
 
@@ -183,14 +182,11 @@ The working corpus has 8 papers on chain-of-thought, tool use, and LLM agents (4
 - Some arXiv PDF downloads fail (404/406). `ingest.py` retries transient errors and skips permanent ones.
 - Small local models can paraphrase loosely. Check the cited sources.
 
-## 📍 Roadmap
+## 🔭 Future Work
 
-- [x] Milestone 1: arXiv ingestion + PDF parsing
-- [x] Milestone 2: Chunking + local embedding + ChromaDB storage
-- [x] Milestone 3: Retrieval + LLM generation with source citations
-- [x] Milestone 4: Streamlit chat interface
-- [x] Milestone 5: Polish (demo screenshot, pinned dependencies, download retry)
-- [ ] Milestone 6: Retrieval quality evaluation + larger corpus
+- Retrieval quality evaluation (hit rate / recall@k on a small hand-labelled question set)
+- Larger, curated corpus
+- Animated demo GIF
 
 ## 📄 License
 
